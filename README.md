@@ -9,11 +9,12 @@ This library provides encoding and decoding functionality for OpenDroneID messag
 ## Features
 
 - ✅ **Complete ASTM F3411 Implementation**: Supports all 6 message types
+- ✅ **Message Pack Support**: Container for multiple messages in single transmission
 - ✅ **Bit-Level Encoding**: Efficient bit-packing for minimal message size
 - ✅ **Type Safety**: Strong typing with Rust enums and structs
 - ✅ **Comprehensive Error Handling**: Clear error messages for invalid data
 - ✅ **CLI Tool**: Command-line interface for easy encoding/decoding
-- ✅ **Full Test Coverage**: Unit tests for all message types
+- ✅ **Full Test Coverage**: Unit tests for all message types and message packs
 
 ## Message Types Supported
 
@@ -55,6 +56,39 @@ let decoded = OpenDroneIdMessage::decode(&encoded)?;
 println!("Decoded: {:?}", decoded);
 ```
 
+### Message Pack Example
+
+```rust
+use opendroneid::{MessagePack, OpenDroneIdMessage, BasicIdMessage, LocationMessage};
+
+// Create multiple messages
+let basic_id = OpenDroneIdMessage::BasicId(BasicIdMessage {
+    uas_id_type: 1,
+    uas_id: "DRONE123".to_string(),
+});
+
+let location = OpenDroneIdMessage::Location(LocationMessage {
+    status: 2,
+    direction: 45,
+    speed: 10,
+    latitude: 123456789,
+    longitude: -987654321,
+    altitude: 500,
+    height: 100,
+});
+
+// Create a message pack
+let message_pack = MessagePack::new(vec![basic_id, location]);
+
+// Encode the message pack
+let encoded = message_pack.encode()?;
+println!("Encoded pack: {:?}", encoded);
+
+// Decode the message pack
+let decoded_pack = MessagePack::decode(&encoded)?;
+println!("Decoded pack with {} messages", decoded_pack.message_count());
+```
+
 ### CLI Usage
 
 The library includes a CLI tool for easy encoding/decoding:
@@ -89,6 +123,32 @@ cargo run -- decode message.bin
 ```
 
 ## API Documentation
+
+### Message Pack
+
+```rust
+pub struct MessagePack {
+    pub version: u8,
+    pub messages: Vec<OpenDroneIdMessage>,
+}
+
+impl MessagePack {
+    /// Create a new Message Pack with the current version
+    pub fn new(messages: Vec<OpenDroneIdMessage>) -> Self;
+    
+    /// Get the number of messages in the pack
+    pub fn message_count(&self) -> usize;
+    
+    /// Check if the pack is empty
+    pub fn is_empty(&self) -> bool;
+    
+    /// Encode the message pack into bytes
+    pub fn encode(&self) -> Result<Vec<u8>, OpenDroneIdError>;
+    
+    /// Decode bytes into a Message Pack
+    pub fn decode(bytes: &[u8]) -> Result<MessagePack, OpenDroneIdError>;
+}
+```
 
 ### Message Types
 
@@ -153,6 +213,15 @@ pub enum OpenDroneIdError {
 ```
 
 ## Technical Details
+
+### Message Pack Format
+
+The Message Pack format follows ASTM F3411 specification:
+
+- **Version**: 3 bits (currently version 0)
+- **Message Count**: 4 bits (supports up to 15 messages per pack)
+- **Messages**: Concatenated encoded messages
+- **Maximum Size**: 15 messages per pack
 
 ### Bit Packing
 

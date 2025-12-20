@@ -1,6 +1,140 @@
 use super::*;
 
 #[test]
+fn test_message_pack_basic() {
+    // Test creating a basic message pack
+    let basic_id = OpenDroneIdMessage::BasicId(BasicIdMessage {
+        uas_id_type: 1,
+        uas_id: "TEST123".to_string(),
+    });
+    
+    let message_pack = MessagePack::new(vec![basic_id]);
+    
+    assert_eq!(message_pack.version, 0);
+    assert_eq!(message_pack.message_count(), 1);
+    assert!(!message_pack.is_empty());
+}
+
+#[test]
+fn test_message_pack_encode_decode_single() {
+    // Test encoding and decoding a message pack with single message
+    let basic_id = OpenDroneIdMessage::BasicId(BasicIdMessage {
+        uas_id_type: 2,
+        uas_id: "DRONE456".to_string(),
+    });
+    
+    let original_pack = MessagePack::new(vec![basic_id]);
+    let encoded = original_pack.encode().unwrap();
+    let decoded_pack = MessagePack::decode(&encoded).unwrap();
+    
+    assert_eq!(decoded_pack.version, original_pack.version);
+    assert_eq!(decoded_pack.message_count(), original_pack.message_count());
+    
+    // Compare the messages
+    match (&original_pack.messages[0], &decoded_pack.messages[0]) {
+        (OpenDroneIdMessage::BasicId(original_msg), OpenDroneIdMessage::BasicId(decoded_msg)) => {
+            assert_eq!(original_msg.uas_id_type, decoded_msg.uas_id_type);
+            assert_eq!(original_msg.uas_id, decoded_msg.uas_id);
+        }
+        _ => panic!("Message type mismatch"),
+    }
+}
+
+#[test]
+fn test_message_pack_encode_decode_multiple() {
+    // Test encoding and decoding a message pack with multiple messages
+    let basic_id = OpenDroneIdMessage::BasicId(BasicIdMessage {
+        uas_id_type: 1,
+        uas_id: "TEST123".to_string(),
+    });
+    
+    let location = OpenDroneIdMessage::Location(LocationMessage {
+        status: 2,
+        direction: 45,
+        speed: 10,
+        latitude: 123456789,
+        longitude: -987654321,
+        altitude: 500,
+        height: 100,
+    });
+    
+    let auth = OpenDroneIdMessage::Auth(AuthMessage {
+        auth_type: 3,
+        auth_data: vec![0x01, 0x02, 0x03, 0x04],
+    });
+    
+    let original_pack = MessagePack::new(vec![basic_id, location, auth]);
+    let encoded = original_pack.encode().unwrap();
+    let decoded_pack = MessagePack::decode(&encoded).unwrap();
+    
+    assert_eq!(decoded_pack.version, original_pack.version);
+    assert_eq!(decoded_pack.message_count(), original_pack.message_count());
+    assert_eq!(decoded_pack.messages.len(), 3);
+}
+
+#[test]
+fn test_message_pack_empty_error() {
+    // Test that empty message pack causes encoding error
+    let empty_pack = MessagePack::new(vec![]);
+    let result = empty_pack.encode();
+    assert!(matches!(result, Err(OpenDroneIdError::EncodingError(_))));
+}
+
+#[test]
+fn test_message_pack_too_many_messages() {
+    // Test that message pack with too many messages causes encoding error
+    let mut messages = Vec::new();
+    for i in 0..16 {
+        messages.push(OpenDroneIdMessage::BasicId(BasicIdMessage {
+            uas_id_type: 1,
+            uas_id: format!("DRONE{}", i),
+        }));
+    }
+    
+    let pack = MessagePack::new(messages);
+    let result = pack.encode();
+    assert!(matches!(result, Err(OpenDroneIdError::EncodingError(_))));
+}
+
+#[test]
+fn test_message_pack_decode_empty() {
+    // Test decoding empty bytes
+    let result = MessagePack::decode(&[]);
+    assert!(matches!(result, Err(OpenDroneIdError::DecodingError(_))));
+}
+
+#[test]
+fn test_message_pack_decode_invalid_version() {
+    // Test decoding with invalid version
+    // Create a message pack with version 1 (invalid)
+    let mut bit_buffer = Vec::new();
+    
+    // Add invalid version (3 bits) - version 1
+    for i in (0..3).rev() {
+        bit_buffer.push((1 >> i) & 1 == 1);
+    }
+    
+    // Add message count (4 bits) - 1 message
+    for i in (0..4).rev() {
+        bit_buffer.push((1 >> i) & 1 == 1);
+    }
+    
+    // Convert to bytes
+    let byte_len = (bit_buffer.len() + 7) / 8;
+    let mut bytes = vec![0u8; byte_len];
+    for (i, &bit) in bit_buffer.iter().enumerate() {
+        if bit {
+            let byte_idx = i / 8;
+            let bit_idx = 7 - (i % 8);
+            bytes[byte_idx] |= 1 << bit_idx;
+        }
+    }
+    
+    let result = MessagePack::decode(&bytes);
+    assert!(matches!(result, Err(OpenDroneIdError::DecodingError(_))));
+}
+
+#[test]
 fn test_basic_id_encode_decode() {
     let original = OpenDroneIdMessage::BasicId(BasicIdMessage {
         uas_id_type: 1,

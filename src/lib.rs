@@ -1,9 +1,12 @@
 // OpenDroneID message types and encoding/decoding
 
-use thiserror::Error;
+pub use thiserror::Error;
 
 #[cfg(test)]
 mod tests;
+
+/// Message Pack version according to ASTM F3411 specification
+const MESSAGE_PACK_VERSION: u8 = 0;
 
 #[derive(Debug, Error)]
 pub enum OpenDroneIdError {
@@ -98,6 +101,191 @@ pub struct SystemMessage {
 pub struct OperatorIdMessage {
     pub operator_id_type: u8,
     pub operator_id: String,
+}
+
+/// Message Pack structure for containing multiple OpenDroneID messages
+#[derive(Debug, Clone, PartialEq)]
+pub struct MessagePack {
+    pub version: u8,
+    pub messages: Vec<OpenDroneIdMessage>,
+}
+
+impl MessagePack {
+    /// Create a new Message Pack with the current version
+    pub fn new(messages: Vec<OpenDroneIdMessage>) -> Self {
+        Self {
+            version: MESSAGE_PACK_VERSION,
+            messages,
+        }
+    }
+
+    /// Get the number of messages in the pack
+    pub fn message_count(&self) -> usize {
+        self.messages.len()
+    }
+
+    /// Check if the pack is empty
+    pub fn is_empty(&self) -> bool {
+        self.messages.is_empty()
+    }
+
+    /// Encode the message pack into bytes according to OpenDroneID specification
+    pub fn encode(&self) -> Result<Vec<u8>, OpenDroneIdError> {
+        if self.messages.is_empty() {
+            return Err(OpenDroneIdError::EncodingError(
+                "Message pack cannot be empty".to_string()
+            ));
+        }
+
+        if self.messages.len() > 15 {
+            return Err(OpenDroneIdError::EncodingError(
+                "Message pack can contain maximum 15 messages".to_string()
+            ));
+        }
+
+        let mut bit_buffer = Vec::new();
+        
+        // Helper function to add bits to buffer (MSB first)
+        fn add_bits(buffer: &mut Vec<bool>, value: u64, num_bits: usize) {
+            for i in (0..num_bits).rev() {
+                buffer.push((value >> i) & 1 == 1);
+            }
+        }
+        
+        // Add version (3 bits)
+        add_bits(&mut bit_buffer, self.version as u64, 3);
+        
+        // Add message count (4 bits - supports up to 15 messages)
+        add_bits(&mut bit_buffer, self.messages.len() as u64, 4);
+        
+        // Encode each message
+        for message in &self.messages {
+            let encoded_message = message.encode()?;
+            // Convert encoded bytes to bits and add to buffer
+            for &byte in &encoded_message {
+                for i in (0..8).rev() {
+                    bit_buffer.push((byte >> i) & 1 == 1);
+                }
+            }
+        }
+        
+        // Convert bit buffer to bytes
+        let byte_len = (bit_buffer.len() + 7) / 8;
+        let mut bytes = vec![0u8; byte_len];
+        for (i, &bit) in bit_buffer.iter().enumerate() {
+            if bit {
+                let byte_idx = i / 8;
+                let bit_idx = 7 - (i % 8); // MSB first within byte
+                bytes[byte_idx] |= 1 << bit_idx;
+            }
+        }
+        
+        Ok(bytes)
+    }
+
+    /// Decode bytes into a Message Pack
+    pub fn decode(bytes: &[u8]) -> Result<MessagePack, OpenDroneIdError> {
+        if bytes.is_empty() {
+            return Err(OpenDroneIdError::DecodingError(
+                "Empty input bytes".to_string()
+            ));
+        }
+
+        // Convert bytes to bit buffer (MSB first)
+        let mut bit_buffer = Vec::new();
+        for &byte in bytes {
+            for i in (0..8).rev() {
+                bit_buffer.push((byte >> i) & 1 == 1);
+            }
+        }
+
+        let mut bit_pos = 0;
+        
+        // Helper function to read bits from buffer
+        fn read_bits(buffer: &[bool], start: usize, num_bits: usize) -> Result<u64, OpenDroneIdError> {
+            if start + num_bits > buffer.len() {
+                return Err(OpenDroneIdError::DecodingError(
+                    format!("Incomplete message pack - need {} bits but only have {}", num_bits, buffer.len() - start)
+                ));
+            }
+            
+            let mut value = 0u64;
+            for i in 0..num_bits {
+                if buffer[start + i] {
+                    value |= 1 << (num_bits - 1 - i);
+                }
+            }
+            Ok(value)
+        }
+        
+        // Read version (3 bits)
+        let version = read_bits(&bit_buffer, bit_pos, 3)? as u8;
+        bit_pos += 3;
+        
+        if version != MESSAGE_PACK_VERSION {
+            return Err(OpenDroneIdError::DecodingError(
+                format!("Unsupported message pack version: {}", version)
+            ));
+        }
+        
+        // Read message count (4 bits)
+        let message_count = read_bits(&bit_buffer, bit_pos, 4)? as usize;
+        bit_pos += 4;
+        
+        if message_count == 0 {
+            return Err(OpenDroneIdError::DecodingError(
+                "Message pack cannot contain zero messages".to_string()
+            ));
+        }
+        
+        if message_count > 15 {
+            return Err(OpenDroneIdError::DecodingError(
+                format!("Invalid message count: {}", message_count)
+            ));
+        }
+        
+        // Decode each message
+        let mut messages = Vec::new();
+        for _ in 0..message_count {
+            // We need to decode messages one by one, but we don't know their boundaries
+            // So we'll use a different approach - convert remaining bits to bytes and decode
+            
+            // Calculate remaining bits
+            let remaining_bits = bit_buffer.len() - bit_pos;
+            if remaining_bits == 0 {
+                return Err(OpenDroneIdError::DecodingError(
+                    "Incomplete message pack - missing message data".to_string()
+                ));
+            }
+            
+            // Convert remaining bits to bytes (we'll try to decode the first message)
+            let remaining_byte_len = (remaining_bits + 7) / 8;
+            let mut remaining_bytes = vec![0u8; remaining_byte_len];
+            
+            for (i, &bit) in bit_buffer.iter().skip(bit_pos).enumerate() {
+                if bit {
+                    let byte_idx = i / 8;
+                    let bit_idx = 7 - (i % 8); // MSB first within byte
+                    remaining_bytes[byte_idx] |= 1 << bit_idx;
+                }
+            }
+            
+            // Try to decode the first message
+            let message = OpenDroneIdMessage::decode(&remaining_bytes)?;
+            
+            // Calculate how many bits this message consumed
+            let encoded_message = message.encode()?;
+            let message_bits = encoded_message.len() * 8;
+            
+            messages.push(message);
+            bit_pos += message_bits;
+        }
+        
+        Ok(MessagePack {
+            version,
+            messages,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
