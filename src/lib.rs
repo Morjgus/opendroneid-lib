@@ -477,8 +477,21 @@ impl OpenDroneIdMessage {
         }
         
         // Read message type (3 bits)
-        let msg_type_value = read_bits(&bit_buffer, bit_pos, 3)?;
-        let msg_type = MessageType::from(msg_type_value as u8);
+        let msg_type_value = read_bits(&bit_buffer, bit_pos, 3)? as u8;
+        // Classify the type field through remoteid's spec-correct, panic-free
+        // message-type table. The local `From<u8>` aborts the process on an
+        // unknown value, so an attacker-controlled air frame with a type of 6
+        // or 7 would take the decoder (and its host) down. remoteid maps
+        // unknown values to a reserved variant, so we turn that into an error.
+        let msg_type = match remoteid::MessageType::from(msg_type_value) {
+            remoteid::MessageType::BasicId => MessageType::BasicId,
+            remoteid::MessageType::Location => MessageType::Location,
+            remoteid::MessageType::Auth => MessageType::Auth,
+            remoteid::MessageType::SelfId => MessageType::SelfId,
+            remoteid::MessageType::System => MessageType::System,
+            remoteid::MessageType::OperatorId => MessageType::OperatorId,
+            _ => return Err(OpenDroneIdError::InvalidMessageType),
+        };
         bit_pos += 3;
         
         match msg_type {
