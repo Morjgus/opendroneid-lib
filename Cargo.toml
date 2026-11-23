@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 thiserror = "1.0"
+remoteid = "0.3.3"
 
 [workspace]
 members = ["opendroneid-cli"]

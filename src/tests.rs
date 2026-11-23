@@ -303,3 +303,14 @@ fn test_incomplete_message() {
     let result = OpenDroneIdMessage::decode(&incomplete_bytes);
     assert!(matches!(result, Err(OpenDroneIdError::DecodingError(_))));
 }
+
+#[test]
+fn test_unknown_message_type_does_not_panic() {
+    // Message type field (top 3 bits) = 6, a value the standard does not
+    // assign to a single message. Before routing the type byte through
+    // remoteid this aborted the process via `panic!` in `From<u8>`, a DoS on
+    // any attacker-controlled air frame. It must now be a recoverable error.
+    let hostile = vec![0b1100_0000u8];
+    let result = OpenDroneIdMessage::decode(&hostile);
+    assert!(matches!(result, Err(OpenDroneIdError::InvalidMessageType)));
+}
